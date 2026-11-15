@@ -1,24 +1,24 @@
 {
   "schemaVersion": 1,
-  "id": "addon-template",
+  "id": "chat-chess",
   "version": "${version}",
-  "name": "Addon Template",
-  "description": "An addon template for Meteor Client addons.",
+  "name": "Chat Chess",
+  "description": "An addon that allows you to play chess with other players.",
   "authors": [
-    "seasnail"
+    "Leonetic"
   ],
   "contact": {
-    "sources": "https://github.com/MeteorDevelopment/meteor-addon-template"
+    "sources": "https://github.com/Leonetic/chat-chess"
   },
-  "icon": "assets/template/icon.png",
+  "icon": "assets/chatchess/icon.png",
   "environment": "client",
   "entrypoints": {
     "meteor": [
-      "com.example.addon.AddonTemplate"
+      "dev.leonetic.chatchess.ChatChess"
     ]
   },
   "mixins": [
-    "addon-template.mixins.json"
+    "chatchess.mixins.json"
   ],
   "custom": {
     "meteor-client:color": "225,25,25",

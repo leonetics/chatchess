@@ -1,0 +1,12 @@
+{
+  "required": true,
+  "package": "dev.leonetic.chatchess.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "dev.leonetic.chatchess.mixin.ChatMixin",
+    "dev.leonetic.chatchess.mixin.MinecraftMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

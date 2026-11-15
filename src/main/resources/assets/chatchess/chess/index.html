@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chat Chess</title>
+<link rel="stylesheet" href="chessboard.min.css">
+<style>
+  :root {
+    --bg: #15161a; --panel: #1e2026; --line: #2c2f37; --text: #e6e6ea; --muted: #9a9ca6;
+    --accent: #7aa2ff; --good: #5fd38d; --bad: #ff6b6b;
+    --light: #e9edf2; --dark: #7d8ea6; --hl: rgba(255, 214, 92, .55);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 24px 16px; display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; }
+  #wrap { position: relative; width: min(560px, 100%); }
+  #board { width: 100%; }
+  .white-1e1d7 { background: var(--light); color: var(--dark); }
+  .black-3c85d { background: var(--dark); color: var(--light); }
+  .board-b72b1 { border: 0; border-radius: 6px; overflow: hidden; }
+  .hl { box-shadow: inset 0 0 0 999px var(--hl); }
+  aside { flex: 1 1 260px; max-width: 360px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 14px; align-self: flex-start; }
+  .player { display: flex; align-items: center; gap: 10px; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; border: 1px solid var(--muted); flex: none; }
+  .dot.w { background: #f4f4f4; } .dot.b { background: #222; }
+  .name { font-weight: 600; } .you { color: var(--muted); font-weight: 400; }
+  .player.turn .name::after { content: "  ●"; color: var(--good); }
+  #status { padding: 10px 12px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line); }
+  #status.over { border-color: var(--accent); }
+  #error { color: var(--bad); min-height: 1.2em; font-size: 13px; }
+  #moves { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; height: 220px; overflow-y: auto; font: 13px/1.6 ui-monospace, Menlo, monospace; display: grid; grid-template-columns: 2.5em 1fr 1fr; align-content: start; }
+  #moves .n { color: var(--muted); }
+  .buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+  button { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 12px; font: inherit; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: default; }
+  button.offer { border-color: var(--good); color: var(--good); }
+  #promo { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.45); border-radius: 6px; }
+  #promo div { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px; display: flex; gap: 6px; }
+  #promo img { width: 64px; height: 64px; cursor: pointer; border-radius: 6px; }
+  #promo img:hover { background: var(--line); }
+  .small { color: var(--muted); font-size: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <div id="wrap">
+    <div id="board"></div>
+    <div id="promo"><div></div></div>
+  </div>
+  <aside>
+    <div class="player" id="top"><span class="dot"></span><span class="name"></span></div>
+    <div id="status">Connecting…</div>
+    <div id="moves"></div>
+    <div class="player" id="bottom"><span class="dot"></span><span class="name"></span></div>
+    <div class="buttons">
+      <button id="draw">Offer draw</button>
+      <button id="resign">Resign</button>
+      <button id="resend" title="Whisper your last move again, if your opponent didn't get it">Resend move</button>
+    </div>
+    <div id="error"></div>
+    <div class="small">Moves travel as whispers in game chat. Keep Minecraft open while you play.</div>
+  </aside>
+</main>
+<script src="jquery.min.js"></script>
+<script src="chess.js"></script>
+<script src="chessboard.min.js"></script>
+<script>
+const key = new URLSearchParams(location.search).get('k');
+let state = null, chess = new Chess(), board = null, pending = false, lastSeen = -1, promoMove = null;
+
+function api(path, params = {}) {
+  const body = new URLSearchParams({ k: key, ...params });
+  return fetch('api/' + path, { method: 'POST', body }).then(r => r.json());
+}
+
+function replay(moves) {
+  const game = new Chess();
+  for (const uci of moves) {
+    const move = game.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || 'q' });
+    if (!move) { showError('Your opponent sent an illegal move (' + uci + ')'); break; }
+  }
+  return game;
+}
+
+function myTurn() {
+  return state && !state.result && chess.turn() === state.color && !chess.game_over();
+}
+
+function onDragStart(source, piece) {
+  if (!myTurn() || pending) return false;
+  if (piece[0] !== state.color) return false;
+}
+
+function onDrop(source, target) {
+  const piece = chess.get(source);
+  const promotes = piece && piece.type === 'p' && (target[1] === '8' || target[1] === '1');
+  const test = chess.move({ from: source, to: target, promotion: 'q' });
+  if (!test) return 'snapback';
+  chess.undo();
+  if (promotes) { askPromotion(source, target); return; }
+  play(source + target);
+}
+
+function askPromotion(from, to) {
+  promoMove = from + to;
+  const box = document.querySelector('#promo div');
+  box.innerHTML = '';
+  for (const p of ['q', 'r', 'b', 'n']) {
+    const img = document.createElement('img');
+    img.src = 'img/' + state.color + p.toUpperCase() + '.png';
+    img.onclick = () => { document.getElementById('promo').style.display = 'none'; play(promoMove + p); };
+    box.appendChild(img);
+  }
+  document.getElementById('promo').style.display = 'flex';
+}
+
+function play(uci) {
+  chess.move({ from: uci.slice(0, 2), to: uci.slice(2, 4), promotion: uci[4] || 'q' });
+  board.position(chess.fen(), false);
+  pending = true;
+  api('move', { ply: chess.history().length - 1, uci }).then(s => {
+    pending = false;
+    if (s.error) showError(s.error);
+    apply(s, true);
+  }).catch(() => { pending = false; showError('Lost contact with Minecraft'); });
+}
+
+function showError(text) {
+  const el = document.getElementById('error');
+  el.textContent = text || '';
+  if (text) setTimeout(() => { if (el.textContent === text) el.textContent = ''; }, 5000);
+}
+
+function highlight() {
+  document.querySelectorAll('#board .hl').forEach(e => e.classList.remove('hl'));
+  const hist = chess.history({ verbose: true });
+  const last = hist[hist.length - 1];
+  if (!last) return;
+  for (const sq of [last.from, last.to]) {
+    const el = document.querySelector('#board [data-square="' + sq + '"]');
+    if (el) el.classList.add('hl');
+  }
+}
+
+function resultText() {
+  if (chess.in_checkmate()) return (chess.turn() === state.color ? state.opponent + ' wins' : 'You win') + ' by checkmate';
+  if (chess.in_stalemate()) return 'Draw by stalemate';
+  if (chess.in_threefold_repetition()) return 'Draw by threefold repetition';
+  if (chess.insufficient_material()) return 'Draw by insufficient material';
+  if (chess.in_draw()) return 'Draw by the 50 move rule';
+  return '';
+}
+
+function apply(s, force) {
+  if (s.error === 'No game') { document.getElementById('status').textContent = 'No game in progress. Start one with .chess <player>.'; return; }
+  const first = !state;
+  state = s;
+  if (first) {
+    board = Chessboard('board', {
+      draggable: true, orientation: s.color === 'w' ? 'white' : 'black',
+      pieceTheme: 'img/{piece}.png', onDragStart, onDrop,
+      onSnapEnd: () => board.position(chess.fen(), false)
+    });
+    window.addEventListener('resize', () => { board.resize(); highlight(); });
+    setPlayer('bottom', s.me, s.color, true);
+    setPlayer('top', s.opponent, s.color === 'w' ? 'b' : 'w', false);
+  }
+  if (force || s.moves.length !== lastSeen) {
+    chess = replay(s.moves);
+    board.position(chess.fen(), !first);
+    if (!first && s.moves.length > lastSeen && chess.turn() === s.color) document.title = '● Your move — Chat Chess';
+    lastSeen = s.moves.length;
+    renderMoves();
+    setTimeout(highlight, 0);
+  }
+  const over = resultText();
+  if (over && !s.result) api('over', { result: over });
+  renderStatus(over);
+}
+
+function setPlayer(id, name, color, you) {
+  const el = document.getElementById(id);
+  el.querySelector('.dot').className = 'dot ' + color;
+  el.querySelector('.name').innerHTML = '';
+  el.querySelector('.name').append(name, ...(you ? [Object.assign(document.createElement('span'), { className: 'you', textContent: ' (you)' })] : []));
+  el.dataset.color = color;
+}
+
+function renderMoves() {
+  const el = document.getElementById('moves');
+  el.innerHTML = '';
+  const san = chess.history();
+  for (let i = 0; i < san.length; i += 2) {
+    el.append(Object.assign(document.createElement('span'), { className: 'n', textContent: (i / 2 + 1) + '.' }));
+    el.append(Object.assign(document.createElement('span'), { textContent: san[i] }));
+    el.append(Object.assign(document.createElement('span'), { textContent: san[i + 1] || '' }));
+  }
+  el.scrollTop = el.scrollHeight;
+}
+
+function renderStatus(over) {
+  const status = document.getElementById('status');
+  const result = state.result || over;
+  status.classList.toggle('over', !!result);
+  if (result) status.textContent = result;
+  else if (state.drawOfferedByThem) status.textContent = state.opponent + ' offers a draw';
+  else if (chess.turn() === state.color) status.textContent = 'Your move' + (chess.in_check() ? ' — check!' : '');
+  else status.textContent = 'Waiting for ' + state.opponent + '…';
+  if (!myTurn()) document.title = 'Chat Chess';
+
+  const turn = chess.turn();
+  for (const id of ['top', 'bottom']) {
+    const el = document.getElementById(id);
+    el.classList.toggle('turn', !result && el.dataset.color === turn);
+  }
+  const draw = document.getElementById('draw');
+  draw.disabled = !!result || state.drawOfferedByMe;
+  draw.textContent = state.drawOfferedByThem ? 'Accept draw' : state.drawOfferedByMe ? 'Draw offered' : 'Offer draw';
+  draw.classList.toggle('offer', state.drawOfferedByThem);
+  document.getElementById('resign').disabled = !!result;
+  document.getElementById('resend').disabled = !!result || chess.turn() === state.color || !state.moves.length;
+}
+
+document.getElementById('draw').onclick = () => api('draw').then(s => { if (s.error) showError(s.error); apply(s); });
+document.getElementById('resign').onclick = () => {
+  const b = document.getElementById('resign');
+  if (b.dataset.confirm) api('resign').then(s => { if (s.error) showError(s.error); apply(s); });
+  else { b.dataset.confirm = '1'; b.textContent = 'Really resign?'; setTimeout(() => { delete b.dataset.confirm; b.textContent = 'Resign'; }, 3000); }
+};
+document.getElementById('resend').onclick = () => api('resend').then(s => { showError(s.error || 'Sent again'); apply(s); });
+
+function poll() {
+  if (pending) return setTimeout(poll, 300);
+  api('state').then(s => apply(s)).catch(() => {
+    document.getElementById('status').textContent = 'Lost contact with Minecraft';
+  }).finally(() => setTimeout(poll, 500));
+}
+poll();
+</script>
+</body>
+</html>
